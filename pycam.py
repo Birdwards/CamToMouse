@@ -1,6 +1,5 @@
 #todo: hotkey for toggling tracking on/off
-#todo: fix freeze on close
-#todo: fix mysterious camera flicker (maybe fixed once tkinter updates properly in their own thread?)
+#todo: why is click working correctly in separate thread? is it just because canvas cleared?
 #todo: does choice of color transform affect accuracy of pose detection?
 #todo: resizable mouse range
 
@@ -32,6 +31,8 @@ cap = None
 recent_positions = dict()
 linger_start = None
 
+fps = 144.0 #todo: selectable fps
+frame_ms = int(1000.0/fps+0.5)
 average_window = 250.0
 click_window = 1000.0
 indicator_window = 500.0
@@ -41,6 +42,7 @@ linger_radius = 15
 click_cooldown = 1000
 start_cooldown = 3000
 click_ready = int(time.time() * 1000) + start_cooldown
+should_click = False
 
 screen_size = pyautogui.size()
 screen_width = screen_size[0]
@@ -58,39 +60,16 @@ root.overrideredirect(True) #remove title bar
 root.attributes("-transparentcolor","red")
 root.config(bg="red")
 canvas = tk.Canvas(root, width=2560, height=1440, bg='red', highlightthickness=0)
+#canvas = tk.Canvas(root, width=100, height=100, bg='gray', highlightthickness=0)
+#canvas.pack()
 canvas.pack(fill=tk.BOTH, expand=True)
 cursor_ring = canvas.create_oval(0,0,0,0, outline='white', width=indicator_width)
 outer_ring = canvas.create_oval(0,0,0,0, outline='black', width=indicator_width)
 root.wm_attributes("-topmost", 1)
 
-should_release = False
-should_close = False
-
-def close_app():
-  global should_release
-  global should_close
-  should_release = True
-  while not should_close:
-    time.sleep(0.01)
-  root.quit()
-
-window = tk.Toplevel()
-cam_canvas = tk.Canvas(window, width=640, height=480, bg='gray', highlightthickness=0)
-cam_canvas.pack()
-load_img = PIL.ImageTk.PhotoImage(PIL.Image.open("load.png"))
-camview = cam_canvas.create_image(320,240, image=load_img)#todo: path relative to run directory
-button = tk.Button(window,text="Close",command=close_app)
-button.pack()
-
-def lerp(a, b, pct):
-  return (1-pct)*a + pct*b
-  
-def draw_landmarks_on_image(rgb_image, detection_result):
-  pose_landmarks_list = detection_result.pose_landmarks
-  annotated_image = np.copy(rgb_image)
-
-  if len(pose_landmarks_list) > 0:
-    nose = pose_landmarks_list[0][0] #todo: if multiple poses detected, is there a way to tell which one is same as one from previous frame?
+nose = None
+def draw_cursor():
+  if nose:
     cur_pos = pyautogui.position()
     mouse_x = lerp(cur_pos[0], nose.x * screen_width, 0.5)
     mouse_y = lerp(cur_pos[1], nose.y * screen_height, 0.5)
@@ -132,11 +111,14 @@ def draw_landmarks_on_image(rgb_image, detection_result):
     if now > click_ready and math.hypot(average[0]-recent_position[0], average[1]-recent_position[1]) < linger_radius:
       if linger_start == None:
         linger_start = now# - average_window
-        print("linger start")
+        #print("linger start")
       else:
         linger_time = now - linger_start
         if linger_time > click_window:
-          pyautogui.click()
+          global should_click
+          #canvas.pack_forget()
+          should_click = True
+          #pyautogui.click()
           click_ready = now + click_cooldown
           print("click") #todo: cooldown after click
         elif linger_time > click_window - indicator_window:
@@ -148,7 +130,52 @@ def draw_landmarks_on_image(rgb_image, detection_result):
     else:
       linger_start = None
       #print("moving")
-      
+  canvas.after(frame_ms, draw_cursor)
+
+draw_cursor()
+
+window = tk.Toplevel()
+cam_canvas = tk.Canvas(window, width=640, height=480, bg='gray', highlightthickness=0)
+cam_canvas.pack()
+load_img = PIL.ImageTk.PhotoImage(PIL.Image.open("load.png"))
+image_for_canvas = np.empty(0)
+image_tk = None
+camview = cam_canvas.create_image(320,240, image=load_img)#todo: path relative to run directory
+
+def draw_webcam():
+  global cam_canvas
+  global camview
+  global image_tk
+  if image_for_canvas.any():
+    image_tk = PIL.ImageTk.PhotoImage(PIL.Image.fromarray(image_for_canvas))
+    cam_canvas.itemconfig(camview, image=image_tk)
+  cam_canvas.after(frame_ms, draw_webcam)
+  
+draw_webcam()
+
+should_release = False
+should_close = False
+def close_app():
+  global should_release
+  global should_close
+  should_release = True
+  while not should_close:
+    time.sleep(0.01)
+  root.quit()
+
+button = tk.Button(window,text="Close",command=close_app)
+button.pack()
+
+def lerp(a, b, pct):
+  return (1-pct)*a + pct*b
+  
+def draw_landmarks_on_image(rgb_image, detection_result):
+  pose_landmarks_list = detection_result.pose_landmarks
+  annotated_image = np.copy(rgb_image)
+
+  if len(pose_landmarks_list) > 0:
+    global nose
+    nose = pose_landmarks_list[0][0] #todo: if multiple poses detected, is there a way to tell which one is same as one from previous frame?
 
   pose_landmark_style = drawing_styles.get_default_pose_landmarks_style()
   pose_connection_style = drawing_utils.DrawingSpec(color=(0, 255, 0), thickness=2)
@@ -168,10 +195,6 @@ def print_result(result: PoseLandmarkerResult, output_image: mp.Image, timestamp
     global recent_timestamp
     if recent_timestamp and timestamp_ms <= recent_timestamp:
         return
-    #cv.imshow('output', output_image.numpy_view())
-    #annotated_image = draw_landmarks_on_image(output_image.numpy_view(), result)
-    #cv.imshow('annotated_frame', annotated_image)
-    #print('pose landmarker result: {}'.format(result))
     
     global recent_result
     global recent_image
@@ -200,6 +223,11 @@ def cam_thread():
               break
           # Capture frame-by-frame
           ret, frame = cap.read()
+
+          global should_click
+          if should_click:
+            pyautogui.click()
+            should_click = False
        
           # if frame is read correctly ret is True
           if not ret:
@@ -211,21 +239,13 @@ def cam_thread():
           mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=flipped_frame)
           detection_result = landmarker.detect_async(mp_image, int(time.time() * 1000))
           # Display the resulting frame
-          #print(recent_result)
           if recent_result != None:
-              global cam_canvas
-              global camview
+              global image_for_canvas
               annotated_image = draw_landmarks_on_image(recent_image.numpy_view(), recent_result)
               #todo: aspect ratio-aware resize
-              image_resized = cv.cvtColor(cv.resize(annotated_image, (640, 480)), cv.COLOR_BGR2RGB) #todo: move earlier in pipeline for performance (but you'll have to also transform landmark coords if you do)
-              photo = PIL.ImageTk.PhotoImage(PIL.Image.fromarray(image_resized))
-              cam_canvas.itemconfig(camview, image=photo)
+              image_for_canvas = cv.cvtColor(cv.resize(annotated_image, (640, 480)), cv.COLOR_BGR2RGB) #todo: move earlier in pipeline for performance (but you'll have to also transform landmark coords if you do)
 
               #cv.imshow('frame2', annotated_image)
-          #if recent_result == None:
-          #    cv.imshow('frame1', frame)
-          '''if cv.waitKey(1) == ord('q'):
-              break'''
   # When everything done, release the capture
   global should_close
   cap.release()
@@ -234,4 +254,5 @@ def cam_thread():
 
 thread = threading.Thread(target=cam_thread, daemon=True) #todo: make non-daemonic; release cap properly on tkinter exit
 thread.start()
+
 root.mainloop()
