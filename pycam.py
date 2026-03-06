@@ -1,7 +1,9 @@
 #todo: hotkey for toggling tracking on/off
 #todo: why is click working correctly in separate thread? is it just because canvas cleared?
+#     or if keeping click in separate thread, maybe calculate click window in that thread instead of waiting for next iteration of loop for should_click to be true 
 #todo: does choice of color transform affect accuracy of pose detection?
 #todo: resizable mouse range
+#todo: move indicator above or below mouse depending on mouse pos at start of linger
 
 #apparently fixes webcam taking forever to load
 import os
@@ -17,7 +19,7 @@ from mediapipe.tasks.python.vision import drawing_utils
 from mediapipe.tasks.python.vision import drawing_styles
 from mediapipe.tasks.python import vision
 
-from hidpi_tk import DPIAwareTk
+#from hidpi_tk import DPIAwareTk
 import tkinter as tk
 import threading
 import PIL.Image
@@ -33,16 +35,18 @@ linger_start = None
 
 fps = 144.0 #todo: selectable fps
 frame_ms = int(1000.0/fps+0.5)
-average_window = 250.0
+average_window = 500.0
 click_window = 1000.0
 indicator_window = 500.0
 indicator_radius = 25.0
-indicator_width = 4.0
+#indicator_width = 4.0
+indicator_size = 20
 linger_radius = 15
 click_cooldown = 1000
 start_cooldown = 3000
 click_ready = int(time.time() * 1000) + start_cooldown
 should_click = False
+queued_pos = None
 
 screen_size = pyautogui.size()
 screen_width = screen_size[0]
@@ -54,25 +58,53 @@ PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
 PoseLandmarkerResult = mp.tasks.vision.PoseLandmarkerResult
 VisionRunningMode = mp.tasks.vision.RunningMode
 
-root=DPIAwareTk()
-root.geometry('2560x1440') #todo: get resolution from pyautogui
+#root=DPIAwareTk()
+root=tk.Tk()
+#root.geometry('2560x1440') #todo: get resolution from pyautogui
 root.overrideredirect(True) #remove title bar
 root.attributes("-transparentcolor","red")
 root.config(bg="red")
-canvas = tk.Canvas(root, width=2560, height=1440, bg='red', highlightthickness=0)
-#canvas = tk.Canvas(root, width=100, height=100, bg='gray', highlightthickness=0)
+#canvas = tk.Canvas(root, width=2560, height=1440, bg='red', highlightthickness=0)
+canvas = tk.Canvas(root, width=100, height=20, bg='gray', highlightthickness=0)
 #canvas.pack()
-canvas.pack(fill=tk.BOTH, expand=True)
-cursor_ring = canvas.create_oval(0,0,0,0, outline='white', width=indicator_width)
-outer_ring = canvas.create_oval(0,0,0,0, outline='black', width=indicator_width)
+#canvas.pack(fill=tk.BOTH, expand=True)
+#test_rect = canvas.create_rectangle(300,300,400,400,fill='blue')
+#cursor_ring = canvas.create_oval(0,0,0,0, outline='white', width=indicator_width)
+#outer_ring = canvas.create_oval(0,0,0,0, outline='black', width=indicator_width)
 root.wm_attributes("-topmost", 1)
 
+ul, ur, dl, dr = tk.Toplevel(), tk.Toplevel(), tk.Toplevel(), tk.Toplevel()
+corners = [ul, ur, dl, dr]
+corner_dirs = [[-1, -1], [1, -1], [-1, 1], [1, 1]]
+for c in range(len(corners)):
+  corners[c].overrideredirect(True)
+  corner_canvas = tk.Canvas(corners[c], width=indicator_size, height=indicator_size, bg='black', highlightthickness=0)
+  corner_canvas.pack()
+  corner_canvas.create_rectangle(
+    0-corner_dirs[c][0]*2,
+    0-corner_dirs[c][1]*2,
+    indicator_size-1-corner_dirs[c][0]*2,
+    indicator_size-1-corner_dirs[c][1]*2,
+    fill='white')
+  corners[c].wm_attributes("-topmost", 1)
+
+
 nose = None
-def draw_cursor():
+def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of model doesn't seem to make a difference
+  print(int(time.time() * 1000))
+  #cur_pos = pyautogui.position()
+  #root.geometry('100x100+'+str(cur_pos[0]-50)+'+'+str(cur_pos[1]+50))
+  global queued_pos
+  if queued_pos:
+    pyautogui.moveTo(queued_pos[0], queued_pos[1]) #move to pos a frame late so indicator is in sync
+  
   if nose:
-    cur_pos = pyautogui.position()
-    mouse_x = lerp(cur_pos[0], nose.x * screen_width, 0.5)
-    mouse_y = lerp(cur_pos[1], nose.y * screen_height, 0.5)
+  #if False:
+    #cur_pos = pyautogui.position()
+    #mouse_x = lerp(cur_pos[0], nose.x * screen_width, 0.5)
+    mouse_x = nose.x * screen_width
+    #mouse_y = lerp(cur_pos[1], nose.y * screen_height, 0.5)
+    mouse_y = nose.y * screen_height
     #pyautogui.moveTo(mouse_x, mouse_y)
     #canvas.coords(cursor_ring, mouse_x-25, mouse_y-25, mouse_x+25, mouse_y+25)
 
@@ -105,9 +137,13 @@ def draw_cursor():
     global indicator_window
     global click_ready
     global linger_start
-    pyautogui.moveTo(average[0], average[1])
-    canvas.coords(cursor_ring, 0, 0, 0, 0)
-    canvas.coords(outer_ring, 0, 0, 0, 0)
+    #pyautogui.moveTo(average[0], average[1])
+    queued_pos = average
+    for c in range(len(corners)):
+      corners[c].geometry(
+        '+'+str(int(average[0]-(indicator_size*0.5)+corner_dirs[c][0]*(indicator_size*0.5+1)))+
+        '+'+str(int(average[1]-(indicator_size*0.5)+corner_dirs[c][1]*(indicator_size*0.5+1)))
+        )
     if now > click_ready and math.hypot(average[0]-recent_position[0], average[1]-recent_position[1]) < linger_radius:
       if linger_start == None:
         linger_start = now# - average_window
@@ -122,10 +158,10 @@ def draw_cursor():
           click_ready = now + click_cooldown
           print("click") #todo: cooldown after click
         elif linger_time > click_window - indicator_window:
-          r = (click_window-linger_time)/indicator_window * indicator_radius - indicator_width*0.5
-          ro = r + indicator_width
-          canvas.coords(cursor_ring, mouse_x-r, mouse_y-r, mouse_x+r, mouse_y+r)
-          canvas.coords(outer_ring, mouse_x-ro, mouse_y-ro, mouse_x+ro, mouse_y+ro)
+          r = (click_window-linger_time)/indicator_window * indicator_radius - indicator_size*0.5
+          #ro = r + indicator_width
+          #canvas.coords(cursor_ring, mouse_x-r, mouse_y-r, mouse_x+r, mouse_y+r)
+          #canvas.coords(outer_ring, mouse_x-ro, mouse_y-ro, mouse_x+ro, mouse_y+ro)
           #print("lingering")
     else:
       linger_start = None
@@ -166,17 +202,19 @@ def close_app():
 button = tk.Button(window,text="Close",command=close_app)
 button.pack()
 
-def lerp(a, b, pct):
-  return (1-pct)*a + pct*b
+'''def lerp(a, b, pct):
+  return (1-pct)*a + pct*b'''
   
 def draw_landmarks_on_image(rgb_image, detection_result):
   pose_landmarks_list = detection_result.pose_landmarks
   annotated_image = np.copy(rgb_image)
 
+  global nose
   if len(pose_landmarks_list) > 0:
-    global nose
     nose = pose_landmarks_list[0][0] #todo: if multiple poses detected, is there a way to tell which one is same as one from previous frame?
-
+  else:
+    nose = None
+  
   pose_landmark_style = drawing_styles.get_default_pose_landmarks_style()
   pose_connection_style = drawing_utils.DrawingSpec(color=(0, 255, 0), thickness=2)
 
