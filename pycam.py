@@ -46,6 +46,7 @@ click_cooldown = 1000
 start_cooldown = 3000
 click_ready = int(time.time() * 1000) + start_cooldown
 should_click = False
+clicked = False
 queued_pos = None
 
 screen_size = pyautogui.size()
@@ -65,15 +66,15 @@ root.overrideredirect(True) #remove title bar
 root.attributes("-transparentcolor","red")
 root.config(bg="red")
 #canvas = tk.Canvas(root, width=2560, height=1440, bg='red', highlightthickness=0)
-canvas = tk.Canvas(root, width=100, height=20, bg='gray', highlightthickness=0)
-#canvas.pack()
+canvas = tk.Canvas(root, width=50, height=50, bg='red', highlightthickness=0)
+canvas.pack()
 #canvas.pack(fill=tk.BOTH, expand=True)
-#test_rect = canvas.create_rectangle(300,300,400,400,fill='blue')
+test_rect = canvas.create_rectangle(0,0,50,50,fill='blue')
 #cursor_ring = canvas.create_oval(0,0,0,0, outline='white', width=indicator_width)
 #outer_ring = canvas.create_oval(0,0,0,0, outline='black', width=indicator_width)
 root.wm_attributes("-topmost", 1)
 
-ul, ur, dl, dr = tk.Toplevel(), tk.Toplevel(), tk.Toplevel(), tk.Toplevel()
+'''ul, ur, dl, dr = tk.Toplevel(), tk.Toplevel(), tk.Toplevel(), tk.Toplevel()
 corners = [ul, ur, dl, dr]
 corner_dirs = [[-1, -1], [1, -1], [-1, 1], [1, 1]]
 for c in range(len(corners)):
@@ -86,7 +87,7 @@ for c in range(len(corners)):
     indicator_size-1-corner_dirs[c][0]*2,
     indicator_size-1-corner_dirs[c][1]*2,
     fill='white')
-  corners[c].wm_attributes("-topmost", 1)
+  corners[c].wm_attributes("-topmost", 1)'''
 
 
 nose = None
@@ -139,10 +140,14 @@ def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of 
     global linger_start
     #pyautogui.moveTo(average[0], average[1])
     queued_pos = average
-    for c in range(len(corners)):
+    '''for c in range(len(corners)):
       corners[c].geometry(
         '+'+str(int(average[0]-(indicator_size*0.5)+corner_dirs[c][0]*(indicator_size*0.5+1)))+
         '+'+str(int(average[1]-(indicator_size*0.5)+corner_dirs[c][1]*(indicator_size*0.5+1)))
+        )'''
+    root.geometry(
+        '+'+str(int(average[0]-25))+
+        '+'+str(int(average[1]-25))
         )
     if now > click_ready and math.hypot(average[0]-recent_position[0], average[1]-recent_position[1]) < linger_radius:
       if linger_start == None:
@@ -152,7 +157,7 @@ def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of 
         linger_time = now - linger_start
         if linger_time > click_window:
           global should_click
-          #canvas.pack_forget()
+          canvas.pack_forget()
           should_click = True
           #pyautogui.click()
           click_ready = now + click_cooldown
@@ -263,9 +268,14 @@ def cam_thread():
           ret, frame = cap.read()
 
           global should_click
+          global clicked
+          if clicked:
+            canvas.pack()
+            clicked = False
           if should_click:
             pyautogui.click()
             should_click = False
+            clicked = True
        
           # if frame is read correctly ret is True
           if not ret:
