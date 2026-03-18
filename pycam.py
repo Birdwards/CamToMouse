@@ -1,9 +1,10 @@
-#todo: hotkey for toggling tracking on/off
+#todo: allow hotkey (for toggling tracking on/off) to be changed from `
 #todo: why is click working correctly in separate thread? is it just because canvas cleared?
 #     or if keeping click in separate thread, maybe calculate click window in that thread instead of waiting for next iteration of loop for should_click to be true 
 #todo: does choice of color transform affect accuracy of pose detection?
 #todo: resizable mouse range
-#todo: sometimes still hangs when click close (do some threads need to be closed more cleanly?)
+#todo: prevent mouse from starting at top left
+#todo: some of these global declarations are unnecessary
 
 #apparently fixes webcam taking forever to load
 import os
@@ -17,6 +18,7 @@ import math
 import pyautogui
 from pynput.mouse import Controller as MouseController
 from pynput.mouse import Button as MouseButton
+from pynput import keyboard
 from mediapipe.tasks.python.vision import drawing_utils
 from mediapipe.tasks.python.vision import drawing_styles
 from mediapipe.tasks.python import vision
@@ -28,6 +30,7 @@ import PIL.Image
 import PIL.ImageTk
 
 mouse = MouseController()
+tracking = False
 
 recent_timestamp = None
 recent_result = None
@@ -49,12 +52,12 @@ click_cooldown = 1000
 start_cooldown = 3000
 click_ready = int(time.time() * 1000) + start_cooldown
 should_click = False
-clicked = False
 queued_pos = None
 
 screen_size = pyautogui.size()
 screen_width = screen_size[0]
 screen_height = screen_size[1]
+min_x, min_y, max_x, max_y = 0.1,0.1,0.9,0.7
 
 BaseOptions = mp.tasks.BaseOptions
 PoseLandmarker = mp.tasks.vision.PoseLandmarker
@@ -64,34 +67,38 @@ VisionRunningMode = mp.tasks.vision.RunningMode
 
 #root=DPIAwareTk()
 root=tk.Tk()
-#root.geometry('2560x1440') #todo: get resolution from pyautogui
 root.overrideredirect(True) #remove title bar
 root.attributes("-transparentcolor","red")
 root.config(bg="red")
-#canvas = tk.Canvas(root, width=2560, height=1440, bg='red', highlightthickness=0)
 canvas = tk.Canvas(root, width=indicator_radius*2, height=indicator_radius*2, bg='red', highlightthickness=0)
 canvas.pack()
-#canvas.pack(fill=tk.BOTH, expand=True)
-#test_rect = canvas.create_rectangle(0,0,50,50,fill='blue')
 inner_ring = canvas.create_oval(0,0,0,0, outline='white', width=indicator_width)
 outer_ring = canvas.create_oval(0,0,0,0, outline='black', width=indicator_width)
 root.wm_attributes("-topmost", 1)
 
+should_release = False
 
 nose = None
-def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of model doesn't seem to make a difference
-  #cur_pos = pyautogui.position()
-  #root.geometry('100x100+'+str(cur_pos[0]-50)+'+'+str(cur_pos[1]+50))
+def draw_cursor(): 
   canvas.coords(outer_ring, -indicator_width, -indicator_width, -indicator_width, -indicator_width)
   canvas.coords(inner_ring, -indicator_width, -indicator_width, -indicator_width, -indicator_width)
+
+  if not tracking:
+    canvas.after(frame_ms, draw_cursor) #todo: take elapsed time into account
+    return
   
   global queued_pos
   if queued_pos: #move to pos a frame late so indicator is in sync
-    #pyautogui.moveTo(queued_pos[0], queued_pos[1])
     mouse.position = queued_pos
+  global should_click
+  if should_click:
+    mouse.click(MouseButton.left, 1)
+    should_click = False
+    canvas.pack()
+    
   if nose:
-    mouse_x = nose.x * screen_width
-    mouse_y = nose.y * screen_height
+    mouse_x = (min(max(nose.x, min_x), max_x)-min_x)/(max_x-min_x) * screen_width
+    mouse_y = (min(max(nose.y, min_y), max_y)-min_y)/(max_y-min_y) * screen_height
 
     global recent_timestamp
     global recent_position
@@ -133,12 +140,10 @@ def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of 
       else:
         linger_time = now - linger_start
         if linger_time > click_window:
-          global should_click
           canvas.pack_forget()
           should_click = True
-          #pyautogui.click()
           click_ready = now + click_cooldown
-          print("click") #todo: cooldown after click
+          #print("click")
         elif linger_time > click_window - indicator_window:
           r = (click_window-linger_time)/indicator_window * (indicator_radius - indicator_width*1.5)
           ro = r + indicator_width
@@ -148,7 +153,8 @@ def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of 
     else:
       linger_start = None
       #print("moving")
-  canvas.after(frame_ms, draw_cursor) #todo: take elapsed time into account
+  if not should_release:
+    canvas.after(frame_ms, draw_cursor) #todo: take elapsed time into account
 
 draw_cursor()
 
@@ -171,13 +177,12 @@ def draw_webcam():
   
 draw_webcam()
 
-should_release = False
-should_close = False
+cam_released = False
 def close_app():
   global should_release
-  global should_close
+  global cam_released
   should_release = True
-  while not should_close:
+  while not cam_released:
     time.sleep(0.01)
   root.quit()
 
@@ -234,7 +239,7 @@ def cam_thread():
       global cap
       cap = cv.VideoCapture(1) #todo: selectable camera
       if not cap.isOpened():
-          print("Cannot open camera")
+          print("Cannot open camera") #todo: deal properly via gui
           exit()
       #while True:
       while cap.isOpened():
@@ -243,17 +248,6 @@ def cam_thread():
               break
           # Capture frame-by-frame
           ret, frame = cap.read()
-
-          global should_click
-          global clicked
-          if clicked:
-            canvas.pack()
-            clicked = False
-          if should_click:
-            #pyautogui.click()
-            mouse.click(MouseButton.left, 1)
-            should_click = False
-            clicked = True
        
           # if frame is read correctly ret is True
           if not ret:
@@ -273,12 +267,23 @@ def cam_thread():
 
               #cv.imshow('frame2', annotated_image)
   # When everything done, release the capture
-  global should_close
+  global cam_released
   cap.release()
   cv.destroyAllWindows()
-  should_close = True
+  cam_released = True
 
-thread = threading.Thread(target=cam_thread, daemon=True) #todo: make non-daemonic; release cap properly on tkinter exit
+def on_press(key):
+    try:
+        if key.char == '`':
+          global tracking
+          tracking = not tracking
+    except AttributeError:
+        pass
+listener = keyboard.Listener(
+    on_press=on_press)
+listener.start()
+
+thread = threading.Thread(target=cam_thread)#, daemon=True) #todo: make non-daemonic; release cap properly on tkinter exit
 thread.start()
 
 root.mainloop()
