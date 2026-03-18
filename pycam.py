@@ -3,7 +3,7 @@
 #     or if keeping click in separate thread, maybe calculate click window in that thread instead of waiting for next iteration of loop for should_click to be true 
 #todo: does choice of color transform affect accuracy of pose detection?
 #todo: resizable mouse range
-#todo: change to pynput so we can also monitor keyboard (eg for hotkey) and mouse (eg for clicked flag)
+#todo: sometimes still hangs when click close (do some threads need to be closed more cleanly?)
 
 #apparently fixes webcam taking forever to load
 import os
@@ -15,6 +15,8 @@ import mediapipe as mp
 import time
 import math
 import pyautogui
+from pynput.mouse import Controller as MouseController
+from pynput.mouse import Button as MouseButton
 from mediapipe.tasks.python.vision import drawing_utils
 from mediapipe.tasks.python.vision import drawing_styles
 from mediapipe.tasks.python import vision
@@ -24,6 +26,8 @@ import tkinter as tk
 import threading
 import PIL.Image
 import PIL.ImageTk
+
+mouse = MouseController()
 
 recent_timestamp = None
 recent_result = None
@@ -76,17 +80,15 @@ root.wm_attributes("-topmost", 1)
 
 nose = None
 def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of model doesn't seem to make a difference
-  print("draw_cursor: " + str(int(time.time() * 1000)))
   #cur_pos = pyautogui.position()
   #root.geometry('100x100+'+str(cur_pos[0]-50)+'+'+str(cur_pos[1]+50))
   canvas.coords(outer_ring, -indicator_width, -indicator_width, -indicator_width, -indicator_width)
   canvas.coords(inner_ring, -indicator_width, -indicator_width, -indicator_width, -indicator_width)
-
   
   global queued_pos
-  if queued_pos:
-    pyautogui.moveTo(queued_pos[0], queued_pos[1]) #move to pos a frame late so indicator is in sync
-  
+  if queued_pos: #move to pos a frame late so indicator is in sync
+    #pyautogui.moveTo(queued_pos[0], queued_pos[1])
+    mouse.position = queued_pos
   if nose:
     mouse_x = nose.x * screen_width
     mouse_y = nose.y * screen_height
@@ -119,7 +121,7 @@ def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of 
     global indicator_window
     global click_ready
     global linger_start
-    queued_pos = average
+    queued_pos = (average[0], average[1]) #todo: there's gotta be a more elegant list-to-tuple conversion
     root.geometry(
         '+'+str(int(average[0]-25))+
         '+'+str(int(average[1]-25))
@@ -146,7 +148,7 @@ def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of 
     else:
       linger_start = None
       #print("moving")
-  canvas.after(frame_ms, draw_cursor)
+  canvas.after(frame_ms, draw_cursor) #todo: take elapsed time into account
 
 draw_cursor()
 
@@ -240,9 +242,7 @@ def cam_thread():
           if should_release:
               break
           # Capture frame-by-frame
-          print("before capture: " + str(int(time.time() * 1000)))
           ret, frame = cap.read()
-          print("after capture: " + str(int(time.time() * 1000)))
 
           global should_click
           global clicked
@@ -250,7 +250,8 @@ def cam_thread():
             canvas.pack()
             clicked = False
           if should_click:
-            pyautogui.click()
+            #pyautogui.click()
+            mouse.click(MouseButton.left, 1)
             should_click = False
             clicked = True
        
