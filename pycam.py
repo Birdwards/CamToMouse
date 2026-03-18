@@ -3,7 +3,7 @@
 #     or if keeping click in separate thread, maybe calculate click window in that thread instead of waiting for next iteration of loop for should_click to be true 
 #todo: does choice of color transform affect accuracy of pose detection?
 #todo: resizable mouse range
-#todo: move indicator above or below mouse depending on mouse pos at start of linger
+#todo: change to pynput so we can also monitor keyboard (eg for hotkey) and mouse (eg for clicked flag)
 
 #apparently fixes webcam taking forever to load
 import os
@@ -39,8 +39,7 @@ average_window = 500.0
 click_window = 1000.0
 indicator_window = 500.0
 indicator_radius = 25.0
-#indicator_width = 4.0
-indicator_size = 20
+indicator_width = 4.0
 linger_radius = 15
 click_cooldown = 1000
 start_cooldown = 3000
@@ -66,48 +65,31 @@ root.overrideredirect(True) #remove title bar
 root.attributes("-transparentcolor","red")
 root.config(bg="red")
 #canvas = tk.Canvas(root, width=2560, height=1440, bg='red', highlightthickness=0)
-canvas = tk.Canvas(root, width=50, height=50, bg='red', highlightthickness=0)
+canvas = tk.Canvas(root, width=indicator_radius*2, height=indicator_radius*2, bg='red', highlightthickness=0)
 canvas.pack()
 #canvas.pack(fill=tk.BOTH, expand=True)
-test_rect = canvas.create_rectangle(0,0,50,50,fill='blue')
-#cursor_ring = canvas.create_oval(0,0,0,0, outline='white', width=indicator_width)
-#outer_ring = canvas.create_oval(0,0,0,0, outline='black', width=indicator_width)
+#test_rect = canvas.create_rectangle(0,0,50,50,fill='blue')
+inner_ring = canvas.create_oval(0,0,0,0, outline='white', width=indicator_width)
+outer_ring = canvas.create_oval(0,0,0,0, outline='black', width=indicator_width)
 root.wm_attributes("-topmost", 1)
-
-'''ul, ur, dl, dr = tk.Toplevel(), tk.Toplevel(), tk.Toplevel(), tk.Toplevel()
-corners = [ul, ur, dl, dr]
-corner_dirs = [[-1, -1], [1, -1], [-1, 1], [1, 1]]
-for c in range(len(corners)):
-  corners[c].overrideredirect(True)
-  corner_canvas = tk.Canvas(corners[c], width=indicator_size, height=indicator_size, bg='black', highlightthickness=0)
-  corner_canvas.pack()
-  corner_canvas.create_rectangle(
-    0-corner_dirs[c][0]*2,
-    0-corner_dirs[c][1]*2,
-    indicator_size-1-corner_dirs[c][0]*2,
-    indicator_size-1-corner_dirs[c][1]*2,
-    fill='white')
-  corners[c].wm_attributes("-topmost", 1)'''
 
 
 nose = None
 def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of model doesn't seem to make a difference
-  print(int(time.time() * 1000))
+  print("draw_cursor: " + str(int(time.time() * 1000)))
   #cur_pos = pyautogui.position()
   #root.geometry('100x100+'+str(cur_pos[0]-50)+'+'+str(cur_pos[1]+50))
+  canvas.coords(outer_ring, -indicator_width, -indicator_width, -indicator_width, -indicator_width)
+  canvas.coords(inner_ring, -indicator_width, -indicator_width, -indicator_width, -indicator_width)
+
+  
   global queued_pos
   if queued_pos:
     pyautogui.moveTo(queued_pos[0], queued_pos[1]) #move to pos a frame late so indicator is in sync
   
   if nose:
-  #if False:
-    #cur_pos = pyautogui.position()
-    #mouse_x = lerp(cur_pos[0], nose.x * screen_width, 0.5)
     mouse_x = nose.x * screen_width
-    #mouse_y = lerp(cur_pos[1], nose.y * screen_height, 0.5)
     mouse_y = nose.y * screen_height
-    #pyautogui.moveTo(mouse_x, mouse_y)
-    #canvas.coords(cursor_ring, mouse_x-25, mouse_y-25, mouse_x+25, mouse_y+25)
 
     global recent_timestamp
     global recent_position
@@ -121,7 +103,6 @@ def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of 
     last_time = now
     start_popping = False
     average = [0,0]
-    #min_x, max_x, min_y, max_y = None, None, None, None
     for timestamp in sorted(recent_positions.keys(), reverse=True):
       if start_popping:
         recent_positions.pop(timestamp)
@@ -138,13 +119,7 @@ def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of 
     global indicator_window
     global click_ready
     global linger_start
-    #pyautogui.moveTo(average[0], average[1])
     queued_pos = average
-    '''for c in range(len(corners)):
-      corners[c].geometry(
-        '+'+str(int(average[0]-(indicator_size*0.5)+corner_dirs[c][0]*(indicator_size*0.5+1)))+
-        '+'+str(int(average[1]-(indicator_size*0.5)+corner_dirs[c][1]*(indicator_size*0.5+1)))
-        )'''
     root.geometry(
         '+'+str(int(average[0]-25))+
         '+'+str(int(average[1]-25))
@@ -163,10 +138,10 @@ def draw_cursor(): #todo: can we get rate of this below 1 per 100 ms? choice of 
           click_ready = now + click_cooldown
           print("click") #todo: cooldown after click
         elif linger_time > click_window - indicator_window:
-          r = (click_window-linger_time)/indicator_window * indicator_radius - indicator_size*0.5
-          #ro = r + indicator_width
-          #canvas.coords(cursor_ring, mouse_x-r, mouse_y-r, mouse_x+r, mouse_y+r)
-          #canvas.coords(outer_ring, mouse_x-ro, mouse_y-ro, mouse_x+ro, mouse_y+ro)
+          r = (click_window-linger_time)/indicator_window * (indicator_radius - indicator_width*1.5)
+          ro = r + indicator_width
+          canvas.coords(outer_ring, indicator_radius-ro, indicator_radius-ro, indicator_radius+ro, indicator_radius+ro)
+          canvas.coords(inner_ring, indicator_radius-r, indicator_radius-r, indicator_radius+r, indicator_radius+r)
           #print("lingering")
     else:
       linger_start = None
@@ -265,7 +240,9 @@ def cam_thread():
           if should_release:
               break
           # Capture frame-by-frame
+          print("before capture: " + str(int(time.time() * 1000)))
           ret, frame = cap.read()
+          print("after capture: " + str(int(time.time() * 1000)))
 
           global should_click
           global clicked
